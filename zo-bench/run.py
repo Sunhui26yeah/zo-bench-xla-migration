@@ -3,7 +3,7 @@ import os
 import random
 
 import wandb
-from xla_compat import HAS_XLA  # must precede transformers (torch_xla 2.9 shims)
+from xla_compat import HAS_XLA, write_xla_metrics_report  # must precede transformers (torch_xla 2.9 shims)
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from torch.utils.data import Dataset
 from tqdm import tqdm
@@ -719,6 +719,7 @@ def main():
                         args) + f"-trainset{train_set_id}.json" if args.result_file is None else args.result_file)
             if args.trainer != "none" and args.clean_model_at_end:
                 framework.delete_checkpoints()
+            write_xla_metrics_report(os.path.join(args.output_dir, "xla_metrics_report.txt"))
 
     else:
         # For each eval sample, there is a training set. no training is allowed

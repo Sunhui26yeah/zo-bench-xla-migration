@@ -82,7 +82,7 @@ from gradient_pruning.pruning_utils import (
 )
 from metrics import f1
 from utils import OPT_PERTURBATION_LEVEL_TO_REGEX
-from xla_compat import on_xla, stream_seed
+from xla_compat import HAS_XLA, log_xla_metrics, on_xla, stream_seed
 
 _is_native_cpu_amp_available = is_torch_greater_or_equal_than_1_10
 
@@ -553,6 +553,8 @@ class OurTrainer(Trainer):
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                    if HAS_XLA and self.state.global_step % args.logging_steps == 0:
+                        log_xla_metrics(os.path.join(args.output_dir, "xla_metrics.jsonl"), self.state.global_step)
 
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
