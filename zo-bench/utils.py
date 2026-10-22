@@ -100,7 +100,12 @@ def forward_wrap_with_option_len(
             -1)  # (bsz x num_options, len)
         selected_log_probs = (selected_log_probs * mask).sum(-1) / mask.sum(-1)  # (bsz x num_options)
 
-        if any([x != num_options[0] for x in num_options]):
+        if torch.is_tensor(num_options):
+            # one host sync instead of one per element (num_options is a device tensor on XLA)
+            different_num_options = bool((num_options != num_options[0]).any())
+        else:
+            different_num_options = any([x != num_options[0] for x in num_options])
+        if different_num_options:
             # Multi choice tasks with different number of options
             loss = 0
             start_id = 0
