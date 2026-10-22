@@ -76,7 +76,7 @@ def forward_wrap_with_option_len(
     shift_logits = logits[..., :-1, :].contiguous()
     # Here we use input_ids (which should always = labels) bc sometimes labels are correct candidate IDs
     shift_labels = torch.clone(input_ids)[..., 1:].contiguous()
-    shift_labels[shift_labels == self.config.pad_token_id] = -100
+    shift_labels.masked_fill_(shift_labels == self.config.pad_token_id, -100)  # no aten::nonzero on XLA
 
     # Apply option len (do not calculate loss on the non-option part)
     # for _i, _len in enumerate(option_len):
