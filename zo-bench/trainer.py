@@ -750,6 +750,13 @@ class OurTrainer(Trainer):
         """
         xla = on_xla(param.data)
         if xla:
+            # Within a step the four sweeps use the same seeds, so z is identical; on XLA keep it from the first sweep
+            # instead of re-tracing its generation three more times (lazy tracing of ~4,300 ops per sweep dominates)
+            key = (zo_seed, self.sparse_grad_random_seed)
+            if getattr(self, "_z_cache_key", None) != key:
+                self._z_cache, self._z_cache_key = {}, key
+            if index in self._z_cache:
+                return self._z_cache[index]
             xm.set_rng_state(stream_seed(zo_seed, index))
         z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
         grad_sparsity = self.get_grad_sparsity_by_name(name)
@@ -759,6 +766,8 @@ class OurTrainer(Trainer):
                 z.masked_fill_(fast_random_mask_like(z, grad_sparsity), 0)
             else:
                 z[fast_random_mask_like(z, grad_sparsity, generator=self.sparse_grad_rng)] = 0
+        if xla:
+            self._z_cache[index] = z
         return z
 
     def zo_forward(self, model, inputs):
@@ -1102,6 +1111,7 @@ class OurTrainer(Trainer):
                 # param.data = param.data - graddiff_times_z / args.q  # NOTE this q division does not work for q>1.
                 param.grad = None  # avoid further update.
             self._xla_graph_cut()
+            self._z_cache, self._z_cache_key = {}, None  # free the cached z after the update
 
         # for name, param in self.named_parameters_to_optim:
         #     param.grad = param.grad / args.q
