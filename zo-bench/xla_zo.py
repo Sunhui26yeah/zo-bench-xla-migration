@@ -26,28 +26,30 @@ class XlaZoSweeps:
         self.params = [p for _, p in named_params]
         dtype, device = self.params[0].dtype, self.params[0].device
         assert all(p.dtype == dtype for p in self.params)
-        self.numel = sum(p.numel() for p in self.params)
-        # 2-D buffer with a wide minor dimension: a 1-D (or [n, 2]) RNG output is tiled (8, 128) on TPU and padded 64x
-        self.shape = (-(-self.numel // self.COLS), self.COLS)
-        pad = self.shape[0] * self.COLS - self.numel
         self.zo_eps = zo_eps
+        # Each parameter occupies whole rows of a [rows, 2048] buffer (2-D with a wide minor dimension: a 1-D RNG output
+        # is tiled (8, 128) on TPU and padded 64x), so the sparsity ratio is per row: a [rows, 1] column, not a
+        # per-element buffer. All OPT-1.3B tensors are multiples of 2048 elements; others get padded rows.
+        rows = [-(-p.numel() // self.COLS) for p in self.params]
+        self.shape = (sum(rows), self.COLS)
         with torch.no_grad():
-            pieces = [p.data.reshape(-1) for p in self.params] + [torch.zeros(pad, dtype=dtype, device=device)]
+            pieces = []
+            for p, r in zip(self.params, rows):
+                pieces.append(p.data.reshape(-1))
+                if r * self.COLS > p.numel():
+                    pieces.append(torch.zeros(r * self.COLS - p.numel(), dtype=dtype, device=device))
             self.flat = torch.cat(pieces).view(self.shape)
-            flat_1d = self.flat.view(-1)
-            offset = 0
-            for p in self.params:
-                n = p.numel()
-                p.data = flat_1d[offset:offset + n].view(p.shape)
-                offset += n
+            row = 0
+            for p, r in zip(self.params, rows):
+                p.data = self.flat[row:row + r].reshape(-1)[:p.numel()].view(p.shape)
+                row += r
             ratios = [grad_sparsity_fn(n) for n, _ in named_params]
-            if all(r is None for r in ratios):
+            if all(x is None for x in ratios):
                 self.ratio = None
             else:
-                # the original compares the dtype mask sample with the Python ratio in that dtype; padding is never masked
-                self.ratio = torch.cat([torch.full((p.numel(),), float("-inf") if r is None else r, dtype=dtype,
-                                                   device=device) for r, p in zip(ratios, self.params)]
-                                       + [torch.full((pad,), float("-inf"), dtype=dtype, device=device)]).view(self.shape)
+                # the original compares the dtype mask sample with the Python ratio in that dtype
+                self.ratio = torch.cat([torch.full((r, 1), float("-inf") if x is None else x, dtype=dtype, device=device)
+                                        for x, r in zip(ratios, rows)])
         xm.mark_step()
 
     def _z(self, zo_seed, sparse_seed):
