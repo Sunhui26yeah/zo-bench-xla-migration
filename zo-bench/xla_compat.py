@@ -2,6 +2,7 @@
 PyTorch/XLA (TPU) support for ZO-Bench. Imported first by run.py.
 """
 import json
+import os
 import time
 
 import torch
@@ -48,6 +49,9 @@ def _patch_opt_attention_clamp():
 
 if HAS_XLA:
     _patch_opt_attention_clamp()
+    # Optional persistent compilation cache (e.g. the full run reuses the executables compiled by the smoke run)
+    if os.environ.get("ZOBENCH_XLA_CACHE_DIR"):
+        xr.initialize_cache(os.environ["ZOBENCH_XLA_CACHE_DIR"], readonly=False)
 
 
 def on_xla(tensor):
