@@ -23,6 +23,33 @@ if HAS_XLA:
         xm.get_ordinal = xr.global_ordinal
 
 
+def _patch_opt_attention_clamp():
+    """
+    transformers 4.28 OPTAttention clamps fp16 scores with
+        torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
+    The 0-dim constant is float32. Eager PyTorch keeps the result in fp16, but torch_xla's maximum lowering yields
+    f32 while the tensor still reports fp16, so the later .to(torch.float16) is skipped and the f32 values reach the
+    fp16 fc1 ("mixed precision is disallowed"). Give the constant the scores' dtype: same value, same eager semantics.
+    """
+    import inspect
+    import textwrap
+
+    from transformers.models.opt import modeling_opt
+
+    old = "torch.tensor(torch.finfo(attn_weights.dtype).min)"
+    src = textwrap.dedent(inspect.getsource(modeling_opt.OPTAttention.forward))
+    if old not in src:
+        return
+    src = src.replace(old, "torch.tensor(torch.finfo(attn_weights.dtype).min, dtype=attn_weights.dtype)")
+    namespace = {}
+    exec(compile(src, modeling_opt.__file__, "exec"), modeling_opt.__dict__, namespace)
+    modeling_opt.OPTAttention.forward = namespace["forward"]
+
+
+if HAS_XLA:
+    _patch_opt_attention_clamp()
+
+
 def on_xla(tensor):
     return tensor.device.type == "xla"
 
