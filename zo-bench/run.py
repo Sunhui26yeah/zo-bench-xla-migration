@@ -619,6 +619,11 @@ def result_file_tag(args):
 
 def main():
     args = parse_args()
+    if HAS_XLA and not torch.cuda.is_available():
+        # Trainer.evaluate() only feeds eval_loss (best-checkpoint selection; there is no compute_metrics), but by
+        # default it also keeps every batch's full-vocabulary logits on the device (~11 GB for the 872-example set)
+        # and concatenates them at growing padded shapes. Keep only the loss on XLA; reported metrics are unchanged.
+        args.prediction_loss_only = True
     if args.prefix_tuning:
         args.mode = "prefix"
     elif args.lora:
