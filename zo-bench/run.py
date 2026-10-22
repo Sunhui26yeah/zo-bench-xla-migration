@@ -3,6 +3,7 @@ import os
 import random
 
 import wandb
+from xla_compat import HAS_XLA  # must precede transformers (torch_xla 2.9 shims)
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from torch.utils.data import Dataset
 from tqdm import tqdm
@@ -183,7 +184,7 @@ class Framework:
         Load HuggingFace models
         """
         with count_time("Loading model with FP%d" % (16 if self.args.load_float16 else 32)):
-            free_in_GB = int(torch.cuda.mem_get_info()[0] / 1024 ** 3)
+            free_in_GB = int(torch.cuda.mem_get_info()[0] / 1024 ** 3) if torch.cuda.is_available() else None
             print(free_in_GB)
             config = AutoConfig.from_pretrained(self.args.model_name)
             if self.args.untie_emb:
@@ -229,6 +230,18 @@ class Framework:
                     )
                 else:
                     raise NotImplementedError(f"Head tuning is not supported for {self.args.model_name}")
+            elif HAS_XLA and not torch.cuda.is_available():
+                # TPU: load on the host in the requested dtype, then move to the XLA device
+                import torch_xla.core.xla_model as xm
+                torch_dtype = torch.float32
+                if self.args.load_float16:
+                    torch_dtype = torch.float16
+                elif self.args.load_bfloat16:
+                    torch_dtype = torch.bfloat16
+                model = AutoModelForCausalLM.from_pretrained(self.args.model_name, config=config,
+                                                             torch_dtype=torch_dtype)
+                model = model.to(xm.xla_device())
+                model.tie_weights()  # moving to XLA unties shared parameters
             elif self.args.no_auto_device:
                 # No auto device (use for FSDP)
                 model = AutoModelForCausalLM.from_pretrained(self.args.model_name, config=config, )
