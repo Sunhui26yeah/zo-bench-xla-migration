@@ -82,7 +82,7 @@ from gradient_pruning.pruning_utils import (
 )
 from metrics import f1
 from utils import OPT_PERTURBATION_LEVEL_TO_REGEX
-from xla_compat import HAS_XLA, log_xla_metrics, on_xla, stream_seed
+from xla_compat import HAS_XLA, log_xla_metrics, no_grad_context, on_xla, stream_seed
 
 _is_native_cpu_amp_available = is_torch_greater_or_equal_than_1_10
 
@@ -760,7 +760,7 @@ class OurTrainer(Trainer):
             # Non-differentiable objective (may require autoregressive generation)
             return self.zo_forward_nondiff(model, inputs)
 
-        with torch.inference_mode():
+        with no_grad_context(model.device):
             inputs = self._prepare_inputs(inputs)
             with self.compute_loss_context_manager():
                 loss = self.compute_loss(model, inputs)
