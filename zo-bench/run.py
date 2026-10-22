@@ -27,7 +27,8 @@ from utils import *
 
 os.environ["TRANSFORMERS_CACHE"] = "./cache"
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
+                    force=True)  # torch_xla configures the root logger first, which made this a no-op
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
