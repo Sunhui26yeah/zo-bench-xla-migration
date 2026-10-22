@@ -731,6 +731,16 @@ class OurTrainer(Trainer):
         for index, (name, param) in enumerate(self.named_parameters_to_optim):
             z = self._sample_z(index, name, param, random_seed if random_seed is not None else self.zo_random_seed)
             param.data = param.data + scaling_factor * z * self.args.zo_eps
+        self._xla_graph_cut()
+
+    def _xla_graph_cut(self):
+        """
+        On XLA, execute the pending graph. Without these cuts one ZO step (four sweeps over all parameters plus two
+        forwards) is a single graph that is recompiled for every padded batch length; with them only the forward graph
+        depends on the batch shape. No effect on CUDA/CPU.
+        """
+        if self.args.device.type == "xla":
+            xm.mark_step()
 
     def _sample_z(self, index, name, param, zo_seed):
         """
@@ -1044,6 +1054,7 @@ class OurTrainer(Trainer):
         # so it does not necessarily use sparse grad.
         self.zo_perturb_parameters(scaling_factor=1)
         loss1 = self.zo_forward(model, inputs)
+        self._xla_graph_cut()
 
         # Second function evaluation
         assert args.q == 1, "only support q=1 for the memory efficiency. If you want to implement q>1, need to store random seeds to save memory. In addition, we need to set different random seed for different z in the q-loop."
@@ -1052,10 +1063,12 @@ class OurTrainer(Trainer):
                 self.zo_perturb_parameters(scaling_factor=-1)
                 loss2 = self.zo_forward(model, inputs)
                 self.projected_grad = ((loss1 - loss2) / self.args.zo_eps).item()
+                self._xla_graph_cut()  # .item() only materializes loss2; flush the rest of the forward
             else:  # two side perturbation
                 self.zo_perturb_parameters(scaling_factor=-2)
                 loss2 = self.zo_forward(model, inputs)
                 self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+                self._xla_graph_cut()  # .item() only materializes loss2; flush the rest of the forward
 
                 # Reset model back to its parameters at start of step
                 self.zo_perturb_parameters(scaling_factor=1)
@@ -1088,6 +1101,7 @@ class OurTrainer(Trainer):
                 self.optimizer.step()  # will only update grad that is not None.
                 # param.data = param.data - graddiff_times_z / args.q  # NOTE this q division does not work for q>1.
                 param.grad = None  # avoid further update.
+            self._xla_graph_cut()
 
         # for name, param in self.named_parameters_to_optim:
         #     param.grad = param.grad / args.q

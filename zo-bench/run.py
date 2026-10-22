@@ -27,7 +27,8 @@ from utils import *
 
 os.environ["TRANSFORMERS_CACHE"] = "./cache"
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
+                    force=True)  # torch_xla configures the root logger first, which made this a no-op
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -238,8 +239,10 @@ class Framework:
                     torch_dtype = torch.float16
                 elif self.args.load_bfloat16:
                     torch_dtype = torch.bfloat16
+                # low_cpu_mem_usage (implied by device_map='auto' in the original) skips the random init, so the
+                # global CPU RNG (sparsity-threshold subsample, train sampler seed) matches the original run
                 model = AutoModelForCausalLM.from_pretrained(self.args.model_name, config=config,
-                                                             torch_dtype=torch_dtype)
+                                                             torch_dtype=torch_dtype, low_cpu_mem_usage=True)
                 model = model.to(xm.xla_device())
                 model.tie_weights()  # moving to XLA unties shared parameters
             elif self.args.no_auto_device:
