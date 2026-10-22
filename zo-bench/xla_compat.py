@@ -27,6 +27,11 @@ def on_xla(tensor):
     return tensor.device.type == "xla"
 
 
+def no_grad_context(device):
+    """torch.inference_mode() breaks views on XLA ("Cannot set version_counter for inference tensor"); no_grad there."""
+    return torch.no_grad() if device.type == "xla" else torch.inference_mode()
+
+
 def stream_seed(seed, index, salt=0):
     """
     Seed for the index-th parameter of one random stream. On XLA, torch.manual_seed does not reseed the device RNG,

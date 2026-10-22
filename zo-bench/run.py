@@ -3,7 +3,7 @@ import os
 import random
 
 import wandb
-from xla_compat import HAS_XLA, write_xla_metrics_report  # must precede transformers (torch_xla 2.9 shims)
+from xla_compat import HAS_XLA, no_grad_context, write_xla_metrics_report  # must precede transformers (torch_xla 2.9 shims)
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from torch.utils.data import Dataset
 from tqdm import tqdm
@@ -329,7 +329,7 @@ class Framework:
             output_text = self.tokenizer.decode(outputs[0][input_ids.size(1):], skip_special_tokens=True).strip()
             return output_text
         else:
-            with torch.inference_mode():
+            with no_grad_context(input_ids.device):
                 self.model.eval()
                 logits = self.model(input_ids=input_ids).logits
             labels = input_ids[0, 1:]
@@ -619,6 +619,11 @@ def result_file_tag(args):
 
 def main():
     args = parse_args()
+    if HAS_XLA and not torch.cuda.is_available():
+        # Trainer.evaluate() only feeds eval_loss (best-checkpoint selection; there is no compute_metrics), but by
+        # default it also keeps every batch's full-vocabulary logits on the device (~11 GB for the 872-example set)
+        # and concatenates them at growing padded shapes. Keep only the loss on XLA; reported metrics are unchanged.
+        args.prediction_loss_only = True
     if args.prefix_tuning:
         args.mode = "prefix"
     elif args.lora:
