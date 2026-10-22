@@ -1063,10 +1063,12 @@ class OurTrainer(Trainer):
                 self.zo_perturb_parameters(scaling_factor=-1)
                 loss2 = self.zo_forward(model, inputs)
                 self.projected_grad = ((loss1 - loss2) / self.args.zo_eps).item()
+                self._xla_graph_cut()  # .item() only materializes loss2; flush the rest of the forward
             else:  # two side perturbation
                 self.zo_perturb_parameters(scaling_factor=-2)
                 loss2 = self.zo_forward(model, inputs)
                 self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+                self._xla_graph_cut()  # .item() only materializes loss2; flush the rest of the forward
 
                 # Reset model back to its parameters at start of step
                 self.zo_perturb_parameters(scaling_factor=1)
