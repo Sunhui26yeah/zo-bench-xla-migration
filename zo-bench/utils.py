@@ -86,7 +86,7 @@ def forward_wrap_with_option_len(
     mask = torch.arange(
         shift_labels.shape[1], device=shift_labels.device
     ).expand(shift_labels.shape[0], -1) < non_option_len.unsqueeze(-1)
-    shift_labels[mask] = -100
+    shift_labels.masked_fill_(mask, -100)  # boolean index_put falls back to aten::nonzero on XLA
 
     # Calculate the loss
     loss_fct = CrossEntropyLoss(ignore_index=-100)
@@ -94,7 +94,7 @@ def forward_wrap_with_option_len(
         # Train as a classification tasks
         log_probs = F.log_softmax(shift_logits, dim=-1)
         mask = shift_labels != -100  # Option part
-        shift_labels[~mask] = 0  # So that it doesn't mess up with indexing
+        shift_labels.masked_fill_(~mask, 0)  # So that it doesn't mess up with indexing
 
         selected_log_probs = torch.gather(log_probs, dim=-1, index=shift_labels.unsqueeze(-1)).squeeze(
             -1)  # (bsz x num_options, len)
