@@ -82,6 +82,7 @@ from gradient_pruning.pruning_utils import (
 )
 from metrics import f1
 from utils import OPT_PERTURBATION_LEVEL_TO_REGEX
+from xla_compat import HAS_XLA, log_xla_metrics, on_xla, stream_seed
 
 _is_native_cpu_amp_available = is_torch_greater_or_equal_than_1_10
 
@@ -552,6 +553,8 @@ class OurTrainer(Trainer):
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                    if HAS_XLA and self.state.global_step % args.logging_steps == 0:
+                        log_xla_metrics(os.path.join(args.output_dir, "xla_metrics.jsonl"), self.state.global_step)
 
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
@@ -725,12 +728,28 @@ class OurTrainer(Trainer):
         torch.manual_seed(random_seed if random_seed is not None else self.zo_random_seed)
         self.sparse_grad_rng.manual_seed(self.sparse_grad_random_seed)
 
-        for name, param in self.named_parameters_to_optim:
-            grad_sparsity = self.get_grad_sparsity_by_name(name)
-            z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-            if grad_sparsity is not None:
-                z[fast_random_mask_like(z, grad_sparsity, generator=self.sparse_grad_rng)] = 0
+        for index, (name, param) in enumerate(self.named_parameters_to_optim):
+            z = self._sample_z(index, name, param, random_seed if random_seed is not None else self.zo_random_seed)
             param.data = param.data + scaling_factor * z * self.args.zo_eps
+
+    def _sample_z(self, index, name, param, zo_seed):
+        """
+        Sample the (sparsified) perturbation z of one parameter. On CUDA/CPU this is the original code: z comes from
+        the global RNG seeded by torch.manual_seed, the mask from self.sparse_grad_rng. On XLA neither seeds the device
+        RNG, so both streams are reseeded per parameter, which reproduces the same z and mask in all four sweeps.
+        """
+        xla = on_xla(param.data)
+        if xla:
+            xm.set_rng_state(stream_seed(zo_seed, index))
+        z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
+        grad_sparsity = self.get_grad_sparsity_by_name(name)
+        if grad_sparsity is not None:
+            if xla:
+                xm.set_rng_state(stream_seed(self.sparse_grad_random_seed, index, salt=1))
+                z.masked_fill_(fast_random_mask_like(z, grad_sparsity), 0)
+            else:
+                z[fast_random_mask_like(z, grad_sparsity, generator=self.sparse_grad_rng)] = 0
+        return z
 
     def zo_forward(self, model, inputs):
         """
@@ -1044,13 +1063,9 @@ class OurTrainer(Trainer):
             # Set the random seed to ensure that we sample the same z for perturbation/update
             torch.manual_seed(self.zo_random_seed)
             self.sparse_grad_rng.manual_seed(self.sparse_grad_random_seed)
-            for name, param in self.named_parameters_to_optim:
+            for index, (name, param) in enumerate(self.named_parameters_to_optim):
                 # Resample z
-                z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device,
-                                 dtype=param.data.dtype)
-                grad_sparsity = self.get_grad_sparsity_by_name(name)
-                if grad_sparsity is not None:
-                    z[fast_random_mask_like(z, grad_sparsity, generator=self.sparse_grad_rng)] = 0
+                z = self._sample_z(index, name, param, self.zo_random_seed)
 
                 if args.trainer == "zo_sign_opt":
                     # ----signOpt_orig
