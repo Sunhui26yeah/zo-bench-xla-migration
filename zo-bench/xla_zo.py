@@ -20,32 +20,39 @@ from xla_compat import stream_seed
 
 
 class XlaZoSweeps:
+    COLS = 2048
 
     def __init__(self, named_params, grad_sparsity_fn, zo_eps):
         self.params = [p for _, p in named_params]
         dtype, device = self.params[0].dtype, self.params[0].device
         assert all(p.dtype == dtype for p in self.params)
         self.numel = sum(p.numel() for p in self.params)
+        # 2-D buffer with a wide minor dimension: a 1-D (or [n, 2]) RNG output is tiled (8, 128) on TPU and padded 64x
+        self.shape = (-(-self.numel // self.COLS), self.COLS)
+        pad = self.shape[0] * self.COLS - self.numel
         self.zo_eps = zo_eps
         with torch.no_grad():
-            self.flat = torch.cat([p.data.reshape(-1) for p in self.params])
+            pieces = [p.data.reshape(-1) for p in self.params] + [torch.zeros(pad, dtype=dtype, device=device)]
+            self.flat = torch.cat(pieces).view(self.shape)
+            flat_1d = self.flat.view(-1)
             offset = 0
             for p in self.params:
                 n = p.numel()
-                p.data = self.flat[offset:offset + n].view(p.shape)
+                p.data = flat_1d[offset:offset + n].view(p.shape)
                 offset += n
             ratios = [grad_sparsity_fn(n) for n, _ in named_params]
             if all(r is None for r in ratios):
                 self.ratio = None
             else:
-                # the original compares the dtype mask sample with the Python ratio in that dtype
+                # the original compares the dtype mask sample with the Python ratio in that dtype; padding is never masked
                 self.ratio = torch.cat([torch.full((p.numel(),), float("-inf") if r is None else r, dtype=dtype,
-                                                   device=device) for r, p in zip(ratios, self.params)])
+                                                   device=device) for r, p in zip(ratios, self.params)]
+                                       + [torch.full((pad,), float("-inf"), dtype=dtype, device=device)]).view(self.shape)
         xm.mark_step()
 
     def _z(self, zo_seed, sparse_seed):
         xm.set_rng_state(stream_seed(zo_seed, 0))
-        z = torch.normal(mean=0, std=1, size=(self.numel,), device=self.flat.device, dtype=self.flat.dtype)
+        z = torch.normal(mean=0, std=1, size=self.shape, device=self.flat.device, dtype=self.flat.dtype)
         if self.ratio is not None:
             xm.set_rng_state(stream_seed(sparse_seed, 0, salt=1))
             mask_sample = torch.empty_like(z).normal_()
