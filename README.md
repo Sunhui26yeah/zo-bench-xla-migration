@@ -1,6 +1,6 @@
 ## TPU migration: result curves
 
-This repository records an agent-driven migration of the original code from NVIDIA GPUs to Google Cloud TPUs, part of the study *Can Coding Agents Migrate Machine Learning Projects Across Hardware Accelerators?* (ICSE 2027 SEIP). The original project's README follows below the figures.
+This repository records an agent-driven migration of the original code from NVIDIA GPUs to Google Cloud TPUs, part of the study *From GPU to TPU with Coding Agents: What Works, What Fails, and What It Costs*, submitted to the ICSE 2027 Software Engineering in Practice (SEIP) track. The original project's README follows below the figures.
 
 **Full runs: the original code on an NVIDIA L4 GPU and the migrated code on a TPU v5e-1, with the paper's values as references.** ([PDF](migration_figures/curves.pdf))
 
